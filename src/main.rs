@@ -2,51 +2,54 @@
 #[macro_use]
 extern crate log;
 extern crate env_logger;
-extern crate gtk;
 extern crate gdk;
 extern crate glib;
-extern crate toml;
+extern crate gtk;
 extern crate itertools;
 extern crate regex;
+extern crate toml;
 #[macro_use]
 extern crate clap;
 
 use gtk::prelude::*;
-use gtk::{TreePath, StyleContext, CellRendererText, Builder, CssProvider, SearchEntry, ListStore, TreeView,
-          TreeViewColumn, Window, GtkWindowExt};
+use gtk::{
+    Builder, CellRendererText, CssProvider, GtkWindowExt, ListStore, SearchEntry, StyleContext, TreePath, TreeView,
+    TreeViewColumn, Window,
+};
 
-use std::rc::Rc;
-use std::io::prelude::*;
-use std::fs;
-use std::fs::File;
-use std::error::Error;
-use std::path::{Path, PathBuf};
-use std::env;
-use itertools::Itertools;
-use std::cell::{Cell, RefCell};
-use std::str::FromStr;
-use gdk::enums::key;
-use gdk::keyval_to_unicode;
 use autocomplete::Completion;
 use engine::DefaultEngine;
 use engine::Engine;
+use gdk::enums::key;
+use gdk::keyval_to_unicode;
+use itertools::Itertools;
+use std::cell::{Cell, RefCell};
+use std::env;
+use std::error::Error;
+use std::fs;
+use std::fs::File;
+use std::io::prelude::*;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::str::FromStr;
 
 #[macro_export]
-macro_rules! trys {($e: expr) => {match $e {
-    Ok (ok) => ok,
-    Err (err) => {
-        return Err (format! ("{}:{}] {}", file!(), line!(), err));
+macro_rules! trys {
+    ($e: expr) => {
+        match $e {
+            Ok(ok) => ok,
+            Err(err) => {
+                return Err(format!("{}:{}] {}", file!(), line!(), err));
+            }
         }
-    }
+    };
 }
-}
-mod engine;
 mod autocomplete;
-mod externalautocompleter;
-mod runner;
-mod externalrunner;
+mod engine;
 mod execution;
-
+mod externalautocompleter;
+mod externalrunner;
+mod runner;
 
 fn append_text_column(tree: &TreeView) {
     let column = TreeViewColumn::new();
@@ -107,6 +110,7 @@ fn create_builder_from_file(mut file: &File) -> Builder {
 #[allow(dead_code)]
 fn main() {
     const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
+
     let matches = clap_app!(rrun =>
         (version: VERSION.unwrap_or("unknown"))
         (about: "Extensible Quick-Launcher")
@@ -116,12 +120,14 @@ fn main() {
             (@arg query: "The query for which to list completions")
         )
     )
-        .get_matches();
+    .get_matches();
 
     let config_directory = get_config_dir();
     let config_path = config_directory.join(Path::new("config.toml"));
+
     let mut file = get_or_create(&config_path, include_str!("config.toml"))
         .unwrap_or_else(|x| panic!("Unable to read configuration! {}", x));
+
     let config = read_config(&mut file);
     let engine = DefaultEngine::new(&config);
 
@@ -131,8 +137,10 @@ fn main() {
             let completion_tsv = completions.map(|c| format!("{}\t{}", c.id, c.text)).join("\n");
             println!("{}", completion_tsv);
         } else {
-            panic!("If you call completions, you need to provide type and query\nIf unsure, run 'rrun completions \
-                    --help'")
+            panic!(
+                "If you call completions, you need to provide type and query\nIf unsure, run 'rrun completions \
+                    --help'"
+            )
         }
     } else {
         run_ui(&config_directory, engine);
@@ -141,28 +149,40 @@ fn main() {
 
 fn run_ui(config_directory: &Path, engine: DefaultEngine) {
     gtk::init().unwrap_or_else(|_| panic!("Failed to initialize GTK."));
+
     debug!("Major: {}, Minor: {}", gtk::get_major_version(), gtk::get_minor_version());
+
     let ui_path = config_directory.join(Path::new("rrun.glade"));
+
     let ui_file = get_or_create(&ui_path, include_str!("rrun.glade"))
         .unwrap_or_else(|x| panic!("Unable to read configuration! {}", x));
+
     let builder = create_builder_from_file(&ui_file);
     let window: Window = builder.get_object("rrun").unwrap();
+
     let css_path = config_directory.join(Path::new("style.css"));
     let css_provider = CssProvider::new();
+
     if css_provider.load_from_path(css_path.to_str().unwrap()).is_err() {
         debug!("unable to load CSS!");
     };
+
     let screen = window.get_screen().unwrap();
+
     StyleContext::add_provider_for_screen(&screen, &css_provider, 1);
+
     let completion_list: TreeView = builder.get_object("completion_view").unwrap();
     let entry: SearchEntry = builder.get_object("search_entry").unwrap();
+
     window.connect_delete_event(|_, _| {
         gtk::main_quit();
         Inhibit(false)
     });
+
     window.set_border_width(0);
     window.set_decorated(false);
     window.show_all();
+
     let column_types = [glib::Type::String];
     let completion_store = ListStore::new(&column_types);
 
@@ -179,11 +199,14 @@ fn run_ui(config_directory: &Path, engine: DefaultEngine) {
     let current_completions: Rc<RefCell<Vec<Completion>>> = Rc::new(RefCell::new(vec![]));
     let selected_completion: Rc<RefCell<Option<Completion>>> = Rc::new(RefCell::new(None));
     let current_and_selected_completions = (current_completions.clone(), selected_completion.clone());
+
     completion_list.get_selection().connect_changed(move |tree_selection| {
         if let Some((completion_model, iter)) = tree_selection.get_selected() {
             if let Some(path) = completion_model.get_path(&iter) {
                 let selected_number = usize::from_str(path.to_string().trim()).unwrap();
+
                 let (ref current_completions, ref selected_completion) = current_and_selected_completions;
+
                 *selected_completion.borrow_mut() = Some(current_completions.borrow()[selected_number].clone());
             }
         }
@@ -193,7 +216,9 @@ fn run_ui(config_directory: &Path, engine: DefaultEngine) {
         let keyval = key.get_keyval();
         let keystate = key.get_state();
         // let keystate = (*key).state;
+
         debug!("key pressed: {}", keyval);
+
         match keyval {
             key::Escape => gtk::main_quit(),
             key::Return => {
@@ -207,12 +232,15 @@ fn run_ui(config_directory: &Path, engine: DefaultEngine) {
                 } else if compls.len() > 0 {
                     compls[0].clone()
                 } else {
-                    let query = entry.get_text().unwrap_or_else(|| panic!("Unable to get string from Entry widget!"));
+                    let query = entry
+                        .get_text()
+                        .unwrap_or_else(|| panic!("Unable to get string from Entry widget!"));
                     engine.get_completions(&query).next().unwrap().to_owned()
                 };
 
                 if keystate.intersects(gdk::ModifierType::CONTROL_MASK) {
-                    let output = engine.run_completion(&the_completion, false)
+                    let output = engine
+                        .run_completion(&the_completion, false)
                         .unwrap_or_else(|x| panic!("Error while executing the command {:?}", x));
                     debug!("ctrl pressed!");
                     if output.len() > 0 {
@@ -220,16 +248,19 @@ fn run_ui(config_directory: &Path, engine: DefaultEngine) {
                         entry.set_position(-1);
                     }
                 } else {
-                    let _ = engine.run_completion(&the_completion, true)
+                    let _ = engine
+                        .run_completion(&the_completion, true)
                         .unwrap_or_else(|x| panic!("Error while executing {:?} in the background!", x));
                     gtk::main_quit();
                 }
-
             }
             key::Tab => {
                 if last_pressed_key.get() == key::Tab {
                     current_completion_index.set(current_completion_index.get() + 1);
-                    if let Some(ref c) = current_completions.borrow().get(current_completion_index.get() as usize) {
+                    if let Some(ref c) = current_completions
+                        .borrow()
+                        .get(current_completion_index.get() as usize)
+                    {
                         entry.set_text(&c.id);
                     }
                 } else {
@@ -241,11 +272,13 @@ fn run_ui(config_directory: &Path, engine: DefaultEngine) {
                 }
             }
             _ => {
-                let is_text_modifying = keyval_to_unicode(key.get_keyval()).is_some() || keyval == key::BackSpace ||
-                                        keyval == key::Delete;
+                let is_text_modifying =
+                    keyval_to_unicode(key.get_keyval()).is_some() || keyval == key::BackSpace || keyval == key::Delete;
                 if is_text_modifying {
-                    let query =
-                        entry.get_text().unwrap_or_else(|| panic!("Unable to get string from Entry widget!")).clone();
+                    let query = entry
+                        .get_text()
+                        .unwrap_or_else(|| panic!("Unable to get string from Entry widget!"))
+                        .clone();
                     let completions = engine.get_completions(query.trim()).collect_vec();
                     completion_store.clear();
                     // debug!("Found {:?} completions", completions.len());
